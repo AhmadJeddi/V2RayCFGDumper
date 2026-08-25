@@ -2,38 +2,84 @@ name: run config.py
 
 on:
   push:
-      branches:
-        - main
+    branches:
+      - main
+      - improve-collector
+
   schedule:
     - cron: "*/15 * * * *"
+
+  workflow_dispatch:
+
+# Prevent overlapping runs of the same workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-      
+
     permissions:
       contents: write
 
     steps:
-      - name: checkout repo content
-        uses: actions/checkout@v2
+      # Check out the repository.
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - name: setup python
-        uses: actions/setup-python@v4
+      # Set up Python.
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.9'
-          
-      - name: install python packages
+          python-version: "3.11"
+
+      # Install Python dependencies.
+      - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: execute py script
+      # Install sing-box for proxy health checks.
+      - name: Install sing-box
+        shell: bash
+        run: |
+          curl -fsSL https://sing-box.app/install.sh | sh
+
+          SING_BOX_PATH="$(command -v sing-box || true)"
+
+          if [ -z "$SING_BOX_PATH" ]; then
+            if [ -x "/usr/local/bin/sing-box" ]; then
+              SING_BOX_PATH="/usr/local/bin/sing-box"
+            elif [ -x "/usr/bin/sing-box" ]; then
+              SING_BOX_PATH="/usr/bin/sing-box"
+            else
+              echo "sing-box installation failed."
+              exit 1
+            fi
+          fi
+
+          echo "sing-box found at: $SING_BOX_PATH"
+          "$SING_BOX_PATH" version
+          echo "SING_BOX_BIN=$SING_BOX_PATH" >> "$GITHUB_ENV"
+
+      # Verify sing-box before running the checker.
+      - name: Verify sing-box
+        run: |
+          echo "Using sing-box: $SING_BOX_BIN"
+          "$SING_BOX_BIN" version
+
+      # Run the collector and health checker.
+      - name: Execute config.py
         run: |
           python config.py
 
-      - name: setup git config
+      # Configure Git identity.
+      - name: Configure Git
         run: |
           git config user.name "GitHub Actions Bot"
-          git config user.email "<>"
-          
-      - uses: stefanzweifel/git-auto-commit-action@v5
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Commit and push sub.txt if it changed.
+      - name: Commit generated changes
+        uses: stefanzweifel/git-auto-commit-action@v7
